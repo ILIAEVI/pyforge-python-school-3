@@ -1,6 +1,7 @@
 from rdkit import Chem
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from os import getenv
 
 
 app = FastAPI()
@@ -15,6 +16,11 @@ class Molecule(BaseModel):
 
 class SubstructureSearch(BaseModel):
     smiles: str
+
+
+@app.get("/")
+def get_server():
+    return {"server_id": getenv("SERVER_ID", "1")}
 
 
 @app.post("/add-molecule")
