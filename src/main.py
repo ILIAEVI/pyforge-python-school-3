@@ -1,8 +1,7 @@
 from rdkit import Chem
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from os import getenv
-
 
 app = FastAPI()
 
@@ -10,8 +9,14 @@ molecules = {}
 
 
 class Molecule(BaseModel):
-    id: int
+    id: int = Field(..., gt=0)
     smiles: str
+
+    @field_validator('id')
+    def validate_id(cls, i):
+        if i <= 0:
+            raise ValidationError("Id must be greater than 0")
+        return i
 
 
 class SubstructureSearch(BaseModel):
@@ -80,7 +85,6 @@ def search_substructure(query: SubstructureSearch):
 
 def substructure_search(mols, mol):
     matching_molecules = []
-
     substructure_mol = Chem.MolFromSmiles(mol)
     if substructure_mol is None:
         raise ValueError("Invalid substructure SMILES string")
