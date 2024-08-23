@@ -1,14 +1,17 @@
 from rdkit import Chem
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from os import getenv
+from database import SessionLocal
+from sqlalchemy.orm import Session
+from models import Molecule
 
 app = FastAPI()
 
 molecules = {}
 
 
-class Molecule(BaseModel):
+class MoleculeSchema(BaseModel):
     id: int = Field(..., gt=0)
     smiles: str
 
@@ -23,59 +26,80 @@ class SubstructureSearch(BaseModel):
     smiles: str
 
 
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
 @app.get("/")
 def get_server():
     return {"server_id": getenv("SERVER_ID", "1")}
 
 
 @app.post("/add-molecule")
-def add_molecule(molecule: Molecule):
+def add_molecule(molecule: MoleculeSchema, db: Session = Depends(get_db)):
     if not Chem.MolFromSmiles(molecule.smiles):
         raise HTTPException(status_code=400, detail="Invalid SMILES")
-    if molecule.id in molecules:
+    if db.query(Molecule).filter(Molecule.id == molecule.id).first():
         raise HTTPException(status_code=400, detail="Molecule ID already exists")
-    molecules[molecule.id] = molecule.smiles
-    return {"id": molecule.id, "smiles": molecule.smiles}
+    new_molecule = Molecule(id=molecule.id, smiles=molecule.smiles)
+    db.add(new_molecule)
+    db.commit()
+    db.refresh(new_molecule)
+    return {"id": new_molecule.id, "smiles": new_molecule.smiles}
 
 
 @app.get("/molecule")
-def list_molecules():
-    if molecules:
-        return [Molecule(id=m_id, smiles=smiles) for m_id, smiles in molecules.items()]
+def list_molecules(db: Session = Depends(get_db)):
+    molecules_lst = db.query(Molecule).all()
+    if molecules_lst:
+        return molecules_lst
     else:
         raise HTTPException(status_code=404, detail="No molecules found")
 
 
 @app.get("/molecule/{molecule_id}")
-def get_molecule(molecule_id: int):
-    if molecule_id not in molecules:
+def get_molecule(molecule_id: int, db: Session = Depends(get_db)):
+    molecule = db.query(Molecule).filter(Molecule.id == molecule_id).first()
+    if molecule is None:
         raise HTTPException(status_code=404, detail="Molecule not found")
-    return Molecule(id=molecule_id, smiles=molecules[molecule_id])
+    return molecule
 
 
 @app.put("/molecule/update/{molecule_id}")
-def update_molecule(molecule_id: int, molecule: Molecule):
-    if not Chem.MolFromSmiles(molecule.smiles):
+def update_molecule(molecule_id: int, mol: MoleculeSchema, db: Session = Depends(get_db)):
+    if not Chem.MolFromSmiles(mol.smiles):
         raise HTTPException(status_code=400, detail="Invalid SMILES")
-    if molecule_id not in molecules:
+    molecule = db.query(Molecule).filter(Molecule.id == molecule_id).first()
+    if molecule is None:
         raise HTTPException(status_code=404, detail="Molecule not found")
-    molecules[molecule_id] = molecule.smiles
+    molecule.smiles = mol.smiles
+    db.commit()
+    db.refresh(molecule)
     return {"id": molecule.id, "smiles": molecule.smiles}
 
 
 @app.delete("/molecule/delete/{molecule_id}")
-def delete_molecule(molecule_id: int):
-    if molecule_id not in molecules:
+def delete_molecule(molecule_id: int, db: Session = Depends(get_db)):
+    molecule = db.query(Molecule).filter(Molecule.id == molecule_id).first()
+    if molecule is None:
         raise HTTPException(status_code=404, detail="Molecule not found")
-    del molecules[molecule_id]
+    db.delete(molecule)
+    db.commit()
     return {"message": "Molecule deleted successfully"}
 
 
 @app.post("/molecule/search")
-def search_substructure(query: SubstructureSearch):
+def search_substructure(query: SubstructureSearch, db: Session = Depends(get_db)):
     substructure_smiles = query.smiles
+    molecules_lst = db.query(Molecule).all()
+    if not molecules_lst:
+        raise HTTPException(status_code=404, detail="No molecules in the database")
     try:
-        matching_molecules = substructure_search(molecules, substructure_smiles)
+        matching_molecules = substructure_search(molecules_lst, substructure_smiles)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not matching_molecules:
@@ -89,12 +113,14 @@ def substructure_search(mols, mol):
     if substructure_mol is None:
         raise ValueError("Invalid substructure SMILES string")
 
-    for mol_id, smiles in mols.items():
-        molecule = Chem.MolFromSmiles(smiles)
-        if not molecule:
-            raise ValueError(f"Invalid SMILES string {smiles}")
-        if molecule.HasSubstructMatch(substructure_mol):
-            matching_molecules.append({'id': mol_id, 'smiles': smiles})
+    for molecule in mols:
+        molecule_smiles = molecule.smiles
+        molecule_mol = Chem.MolFromSmiles(molecule_smiles)
+        if molecule_mol is None:
+            continue
+        if molecule_mol.HasSubstructMatch(substructure_mol):
+            matching_molecules.append({'id': molecule.id, 'smiles': molecule.smiles})
+
     return matching_molecules
 
 

@@ -8,7 +8,9 @@ COPY src /app
 
 WORKDIR /app
 
-RUN pip install fastapi uvicorn pydantic
+COPY ./requirements.txt ./requirements.txt
+
+RUN pip install -r requirements.txt
 
 EXPOSE 8000
 
