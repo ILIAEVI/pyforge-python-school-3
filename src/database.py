@@ -2,7 +2,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session
 
 
-DATABASE_URL = "postgresql://test:test@localhost:5432/test"
+DATABASE_URL = "postgresql://test:test@db:5432/test"
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
