@@ -19,10 +19,16 @@ services:
       interval: 10s
       retries: 10
 
+  redis:
+    image: "redis:alpine"
+    ports:
+      - "6379:6379"
+
   web1:
     build: .
     depends_on:
       - db
+      - redis
     volumes:
       - ./src:/app
     environment:
@@ -34,6 +40,7 @@ services:
     build: .
     depends_on:
       - db
+      - redis
     volumes:
       - ./src:/app
     environment:
@@ -50,6 +57,7 @@ services:
     depends_on:
       - web1
       - web2
+
 
 volumes:
   postgres_data:

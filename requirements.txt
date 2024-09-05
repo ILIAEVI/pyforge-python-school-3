@@ -1,6 +1,7 @@
 alembic==1.13.2
 annotated-types==0.7.0
 anyio==4.4.0
+async-timeout==4.0.3
 certifi==2024.7.4
 click==8.1.7
 fastapi==0.112.0
@@ -22,6 +23,7 @@ pydantic_core==2.20.1
 pytest==8.3.2
 python-dotenv==1.0.1
 rdkit==2024.3.5
+redis==5.0.8
 setuptools==72.1.0
 sniffio==1.3.1
 SQLAlchemy==2.0.32

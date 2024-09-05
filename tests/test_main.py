@@ -1,13 +1,39 @@
+import pytest
 from fastapi.testclient import TestClient
-from src.main import app
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, scoped_session
+from src.database import SessionLocal
+from src.main import app, get_db
+from src.models import Base
+
+TEST_DATABASE_URL = "postgresql://test:test@localhost:5432/test"
+
+engine = create_engine(TEST_DATABASE_URL)
+
+TestingSessionLocal = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
+
+
+def override_get_db():
+    try:
+        db = TestingSessionLocal()
+        yield db
+    finally:
+        db.close()
+
+app.dependency_overrides[get_db] = override_get_db
 
 client = TestClient(app)
 
+@pytest.fixture(scope="module")
+def setup_database():
+    Base.metadata.create_all(bind=engine)
+    yield
+    Base.metadata.drop_all(bind=engine)
 
 def test_add_molecule():
-    response = client.post("/add-molecule", json={"id": 1, "smiles": "CCO"})
-    assert response.status_code == 200
-    assert response.json() == {"id": 1, "smiles": "CCO"}
+    response = client.post("/add-molecule", json={"id": 23, "smiles": "COO"})
+    assert response.status_code == 201
+    assert response.json() == {"id": 23, "smiles": "COO"}
 
     # Test invalid SMILE
     response = client.post("/add-molecule", json={"id": 2, "smiles": "something"})
@@ -81,7 +107,6 @@ def test_search_substructure():
     response = client.post("/molecule/search", json={"smiles": "Invalid"})
     assert response.status_code == 400
     assert response.json() == {"detail": "Invalid substructure SMILES string"}
-
 
 def test_molecule_invalid_id():
     response = client.post("/add-molecule", json={"id": -1, "smiles": "CCO"})

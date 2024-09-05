@@ -1,18 +1,18 @@
-from rdkit import Chem
+import logging
+from os import getenv
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field, ValidationError, field_validator
-from os import getenv
-from .database import SessionLocal
+from rdkit import Chem
 from sqlalchemy.orm import Session
+from .database import SessionLocal
 from .models import Molecule
-import logging
+from .redis import get_cached_result, set_cache
+from fastapi.responses import JSONResponse, Response
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
-
-molecules = {}
 
 
 class MoleculeSchema(BaseModel):
@@ -61,14 +61,16 @@ def add_molecule(molecule: MoleculeSchema, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_molecule)
     logger.info(f"Added molecule with ID: {new_molecule.id} and SMILES: {new_molecule.smiles}")
-    return {"id": new_molecule.id, "smiles": new_molecule.smiles}
-
+    return JSONResponse(
+        status_code=201,
+        content={"id": new_molecule.id, "smiles": new_molecule.smiles}
+    )
 
 @app.get("/molecule")
 def list_molecules(db: Session = Depends(get_db)):
     molecules_lst = db.query(Molecule).all()
     if molecules_lst:
-        return molecules_lst
+        return Response(status_code=200, content=molecules_lst)
     else:
         raise HTTPException(status_code=404, detail="No molecules found")
 
@@ -78,7 +80,10 @@ def get_molecule(molecule_id: int, db: Session = Depends(get_db)):
     molecule = db.query(Molecule).filter(Molecule.id == molecule_id).first()
     if molecule is None:
         raise HTTPException(status_code=404, detail="Molecule not found")
-    return molecule
+    return JSONResponse(
+        status_code=200,
+        content={"molecule": molecule}
+    )
 
 
 @app.put("/molecule/update/{molecule_id}")
@@ -92,7 +97,11 @@ def update_molecule(molecule_id: int, mol: MoleculeSchema, db: Session = Depends
     db.commit()
     db.refresh(molecule)
     logger.info(f"Updated molecule with ID: {molecule.id} to new SMILES: {molecule.smiles}")
-    return {"id": molecule.id, "smiles": molecule.smiles}
+    return JSONResponse(
+        status_code=200,
+        content={"id": molecule.id, "smiles": molecule.smiles}
+    )
+
 
 
 @app.delete("/molecule/delete/{molecule_id}")
@@ -103,13 +112,24 @@ def delete_molecule(molecule_id: int, db: Session = Depends(get_db)):
     db.delete(molecule)
     db.commit()
     logger.info(f"Deleted molecule with ID: {molecule_id}")
-    return {"message": "Molecule deleted successfully"}
+    return JSONResponse(
+        status_code=200,
+        content={"message": "Molecule deleted successfully"}
+    )
 
 
 @app.post("/molecule/search")
-def search_substructure(query: SubstructureSearch, db: Session = Depends(get_db)):
+async def search_substructure(query: SubstructureSearch, db: Session = Depends(get_db)):
     substructure_smiles = query.smiles
     limit = query.limit
+
+    cache_key = f"substructure_search:{substructure_smiles}:{limit}"
+    cached_result = get_cached_result(cache_key)
+
+    if cached_result:
+        logger.info(f"Cache hit for substructure search: {substructure_smiles}")
+        return {"source": "cache", "data": cached_result}
+
     molecules_lst = db.query(Molecule).all()
     if not molecules_lst:
         raise HTTPException(status_code=404, detail="No molecules in the database")
@@ -121,7 +141,13 @@ def search_substructure(query: SubstructureSearch, db: Session = Depends(get_db)
     if not matching_molecules:
         raise HTTPException(status_code=404, detail="No substructure matches")
     logger.info(f"Substructure search returned {len(matching_molecules)} molecules")
-    return {"matching_molecules": matching_molecules}
+
+    set_cache(cache_key, {"matching_molecules": matching_molecules}, expiration=60)
+
+    return JSONResponse(
+        status_code=200,
+        content={"matching_molecules": matching_molecules}
+    )
 
 
 def substructure_search(mols, mol, lim):
