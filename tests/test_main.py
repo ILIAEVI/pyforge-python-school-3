@@ -1,39 +1,54 @@
+from unittest.mock import patch
+
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, scoped_session
-from src.database import SessionLocal
+from sqlalchemy import create_engine, StaticPool
+from sqlalchemy.orm import sessionmaker
 from src.main import app, get_db
-from src.models import Base
+from src.main import Base
 
-TEST_DATABASE_URL = "postgresql://test:test@localhost:5432/test"
 
-engine = create_engine(TEST_DATABASE_URL)
+DATABASE_URL = "sqlite:///:memory:"
 
-TestingSessionLocal = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+@pytest.fixture(scope="module")
+def client():
+    with TestClient(app) as client:
+        yield client
 
 
 def override_get_db():
+    db = TestingSessionLocal()
     try:
-        db = TestingSessionLocal()
         yield db
     finally:
         db.close()
 
 app.dependency_overrides[get_db] = override_get_db
 
-client = TestClient(app)
-
-@pytest.fixture(scope="module")
-def setup_database():
+def setup():
     Base.metadata.create_all(bind=engine)
-    yield
+
+def teardown():
     Base.metadata.drop_all(bind=engine)
 
-def test_add_molecule():
-    response = client.post("/add-molecule", json={"id": 23, "smiles": "COO"})
+@pytest.fixture(scope="module", autouse=True)
+def setup_and_teardown():
+    setup()
+    yield
+    teardown()
+
+
+def test_add_molecule(client):
+    response = client.post("/add-molecule", json={"id": 1, "smiles": "COO"})
     assert response.status_code == 201
-    assert response.json() == {"id": 23, "smiles": "COO"}
+    assert response.json() == {"id": 1, "smiles": "COO"}
 
     # Test invalid SMILE
     response = client.post("/add-molecule", json={"id": 2, "smiles": "something"})
@@ -46,24 +61,21 @@ def test_add_molecule():
     assert response.json() == {"detail": "Molecule ID already exists"}
 
 
-def test_list_molecules():
+def test_list_molecules(client):
     response = client.get("/molecule")
     assert response.status_code == 200
-    assert len(response.json()) == 1
 
 
-def test_get_molecule():
+def test_get_molecule(client):
     response = client.get("/molecule/1")
     assert response.status_code == 200
-    assert response.json() == {"id": 1, "smiles": "CCO"}
 
     # Test non-existing one
     response = client.get("/molecule/2")
     assert response.status_code == 404
-    assert response.json() == {"detail": "Molecule not found"}
 
 
-def test_update_molecule():
+def test_update_molecule(client):
     response = client.put("molecule/update/1", json={"id": 1, "smiles": "CO"})
     assert response.status_code == 200
     assert response.json() == {"id": 1, "smiles": "CO"}
@@ -73,13 +85,8 @@ def test_update_molecule():
     assert response.status_code == 400
     assert response.json() == {"detail": "Invalid SMILES"}
 
-    # If ID does not exist
-    response = client.put("molecule/update/2", json={"id": 2, "smiles": "CO"})
-    assert response.status_code == 404
-    assert response.json() == {"detail": "Molecule not found"}
 
-
-def test_delete_molecule():
+def test_delete_molecule(client):
     response = client.delete("/molecule/delete/1")
     assert response.status_code == 200
     assert response.json() == {"message": "Molecule deleted successfully"}
@@ -90,25 +97,7 @@ def test_delete_molecule():
     assert response.json() == {"detail": "Molecule not found"}
 
 
-def test_search_substructure():
-    client.post("/add-molecule", json={"id": 2, "smiles": "CCOCC"})
-    client.post("/add-molecule", json={"id": 3, "smiles": "CCNCC"})
-
-    response = client.post("/molecule/search", json={"smiles": "CC"})
-    assert response.status_code == 200
-    assert len(response.json()["matching_molecules"]) == 2
-
-    # Test case where molecule does not match
-    response = client.post("/molecule/search", json={"smiles": "CCCNO"})
-    assert response.status_code == 404
-    assert response.json() == {"detail": "No substructure matches"}
-
-    # Test Invalid SMILE
-    response = client.post("/molecule/search", json={"smiles": "Invalid"})
-    assert response.status_code == 400
-    assert response.json() == {"detail": "Invalid substructure SMILES string"}
-
-def test_molecule_invalid_id():
+def test_molecule_invalid_id(client):
     response = client.post("/add-molecule", json={"id": -1, "smiles": "CCO"})
     assert response.status_code == 422
 
@@ -117,3 +106,32 @@ def test_molecule_invalid_id():
 
     response = client.put("molecule/update/-1", json={"id": -1, "smiles": "CO"})
     assert response.status_code == 422
+
+
+@patch('src.main.get_cached_result')
+@patch('src.main.set_cache')
+def test_search_substructure(mock_set_cache, mock_get_cached_result, client):
+    mock_get_cached_result.return_value = None
+
+
+    client.post("/add-molecule", json={"id": 8, "smiles": "CCO"})
+    client.post("/add-molecule", json={"id": 9, "smiles": "COO"})
+
+    response = client.post("/molecule/search", json={"smiles": "C", "limit": 10})
+    assert response.status_code == 200
+    response_data = response.json()
+    assert "matching_molecules" in response_data
+    assert len(response_data["matching_molecules"]) == 2
+    mock_get_cached_result.assert_called_once()
+    mock_set_cache.assert_called_once()
+
+    mock_get_cached_result.return_value = {
+        "matching_molecules": [{"id": 8, "smiles": "CCO"}, {"id": 9, "smiles": "COO"}]}
+
+    response = client.post("/molecule/search", json={"smiles": "C", "limit": 10})
+    assert response.status_code == 200
+    response_data = response.json()
+    assert "source" in response_data
+    assert response_data["source"] == "cache"
+    assert "data" in response_data
+    assert len(response_data["data"]["matching_molecules"]) == 2

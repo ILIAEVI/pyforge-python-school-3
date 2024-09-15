@@ -6,15 +6,15 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
-      POSTGRES_USER: test
-      POSTGRES_PASSWORD: test
-      POSTGRES_DB: test
+      POSTGRES_USER: smiles
+      POSTGRES_PASSWORD: smiles
+      POSTGRES_DB: smiles
     restart: always
     ports:
       - "5432:5432"
     healthcheck:
       test:
-        [ "CMD", "pg_isready", "-q", "-d", "test", "-U", "test" ]
+        [ "CMD", "pg_isready", "-q", "-d", "smiles", "-U", "smiles" ]
       timeout: 45s
       interval: 10s
       retries: 10
@@ -32,7 +32,7 @@ services:
     volumes:
       - ./src:/app
     environment:
-      DATABASE_URL: postgresql://test:test@db:5432/test
+      DATABASE_URL: postgresql://smiles:smiles@db:5432/smiles
     ports:
       - "8001:8000"
 
@@ -44,7 +44,7 @@ services:
     volumes:
       - ./src:/app
     environment:
-      DATABASE_URL: postgresql://test:test@db:5432/test
+      DATABASE_URL: postgresql://smiles:smiles@db:5432/smiles
     ports:
       - "8002:8000"
 

@@ -31,3 +31,4 @@ starlette==0.37.2
 typing_extensions==4.12.2
 uvicorn==0.30.6
 wheel==0.43.0
+sqlalchemy-utils~=0.41.2

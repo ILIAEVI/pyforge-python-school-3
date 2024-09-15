@@ -4,15 +4,15 @@ from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from rdkit import Chem
 from sqlalchemy.orm import Session
-from .database import SessionLocal
-from .models import Molecule
 from .redis import get_cached_result, set_cache
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse
+from sqlalchemy import Column, Integer, String
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, scoped_session, declarative_base
+from contextlib import asynccontextmanager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-app = FastAPI()
 
 
 class MoleculeSchema(BaseModel):
@@ -36,6 +36,24 @@ class SubstructureSearch(BaseModel):
             raise ValueError("Limit must be a positive integer")
         return value
 
+
+DATABASE_URL = f"postgresql://smiles:smiles@db:5432/smiles"
+
+engine = create_engine(DATABASE_URL)
+SessionLocal = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
+Base = declarative_base()
+
+
+class Molecule(Base):
+    __tablename__ = 'molecules'
+    id = Column(Integer, primary_key=True, index=True)
+    smiles = Column(String, index=True)
+
+
+@asynccontextmanager
+async def lifespan():
+    Base.metadata.create_all(bind=engine)
+app = FastAPI()
 
 def get_db():
     db = SessionLocal()
@@ -70,7 +88,7 @@ def add_molecule(molecule: MoleculeSchema, db: Session = Depends(get_db)):
 def list_molecules(db: Session = Depends(get_db)):
     molecules_lst = db.query(Molecule).all()
     if molecules_lst:
-        return Response(status_code=200, content=molecules_lst)
+        return molecules_lst
     else:
         raise HTTPException(status_code=404, detail="No molecules found")
 
@@ -80,10 +98,7 @@ def get_molecule(molecule_id: int, db: Session = Depends(get_db)):
     molecule = db.query(Molecule).filter(Molecule.id == molecule_id).first()
     if molecule is None:
         raise HTTPException(status_code=404, detail="Molecule not found")
-    return JSONResponse(
-        status_code=200,
-        content={"molecule": molecule}
-    )
+    return molecule
 
 
 @app.put("/molecule/update/{molecule_id}")

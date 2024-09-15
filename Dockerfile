@@ -1,7 +1,6 @@
 FROM continuumio/miniconda3
 LABEL authors="giorgi"
 
-# Install RDKit
 RUN conda install -c conda-forge rdkit -y
 
 COPY ./requirements.txt ./requirements.txt
