@@ -19,6 +19,15 @@ services:
       interval: 10s
       retries: 10
 
+  celery_worker:
+    build: .
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./src:/app
+    command: celery -A src.celery_worker.celery worker --loglevel=info
+
   redis:
     image: "redis:alpine"
     ports:

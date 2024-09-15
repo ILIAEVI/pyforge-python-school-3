@@ -1,15 +1,18 @@
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 from os import getenv
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from rdkit import Chem
 from sqlalchemy.orm import Session
+from src.celery_worker import celery
 from .redis import get_cached_result, set_cache
 from fastapi.responses import JSONResponse
-from sqlalchemy import Column, Integer, String
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, scoped_session, declarative_base
-from contextlib import asynccontextmanager
+from src.models import Molecule, Base
+from src.tasks import substructure_search_task, substructure_search
+from src.database import engine, get_db
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -37,30 +40,12 @@ class SubstructureSearch(BaseModel):
         return value
 
 
-DATABASE_URL = f"postgresql://smiles:smiles@db:5432/smiles"
-
-engine = create_engine(DATABASE_URL)
-SessionLocal = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
-Base = declarative_base()
-
-
-class Molecule(Base):
-    __tablename__ = 'molecules'
-    id = Column(Integer, primary_key=True, index=True)
-    smiles = Column(String, index=True)
-
 
 @asynccontextmanager
 async def lifespan():
     Base.metadata.create_all(bind=engine)
-app = FastAPI()
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+app = FastAPI()
 
 
 @app.get("/")
@@ -132,7 +117,6 @@ def delete_molecule(molecule_id: int, db: Session = Depends(get_db)):
         content={"message": "Molecule deleted successfully"}
     )
 
-
 @app.post("/molecule/search")
 async def search_substructure(query: SubstructureSearch, db: Session = Depends(get_db)):
     substructure_smiles = query.smiles
@@ -145,42 +129,20 @@ async def search_substructure(query: SubstructureSearch, db: Session = Depends(g
         logger.info(f"Cache hit for substructure search: {substructure_smiles}")
         return {"source": "cache", "data": cached_result}
 
-    molecules_lst = db.query(Molecule).all()
-    if not molecules_lst:
-        raise HTTPException(status_code=404, detail="No molecules in the database")
-    try:
-        matching_molecules = list(substructure_search(molecules_lst, substructure_smiles, limit))
-    except Exception as e:
-        logger.error(f"Error during substructure search: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    if not matching_molecules:
-        raise HTTPException(status_code=404, detail="No substructure matches")
-    logger.info(f"Substructure search returned {len(matching_molecules)} molecules")
+    task = substructure_search_task.delay(substructure_smiles, limit)
 
-    set_cache(cache_key, {"matching_molecules": matching_molecules}, expiration=60)
+    while not task.ready():
+        await asyncio.sleep(1)
 
-    return JSONResponse(
-        status_code=200,
-        content={"matching_molecules": matching_molecules}
-    )
-
-
-def substructure_search(mols, mol, lim):
-    matching_molecules = []
-    substructure_mol = Chem.MolFromSmiles(mol)
-    if substructure_mol is None:
-        raise ValueError("Invalid substructure SMILES string")
-
-    for molecule in mols:
-        if len(matching_molecules) >= lim:
-            break
-        molecule_smiles = molecule.smiles
-        molecule_mol = Chem.MolFromSmiles(molecule_smiles)
-        if molecule_mol is None:
-            continue
-        if molecule_mol.HasSubstructMatch(substructure_mol):
-            matching_molecules.append({'id': molecule.id, 'smiles': molecule.smiles})
-            yield {'id': molecule.id, 'smiles': molecule.smiles}
+    if task.state == 'SUCCESS':
+        matching_molecules = task.result
+        set_cache(cache_key, {"matching_molecules": matching_molecules}, expiration=60)
+        return JSONResponse(
+            status_code=200,
+            content={"matching_molecules": matching_molecules}
+        )
+    else:
+        raise HTTPException(status_code=400, detail=f"Task failed with state: {task.state}")
 
 
 if __name__ == "__main__":
