@@ -45,12 +45,16 @@ jobs:
           aws ecr describe-images --repository-name pyforge-python-school-3 --region eu-north-1
 
       - name: Pull Docker Image
+        env:
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker pull 034362041234.dkr.ecr.eu-north-1.amazonaws.com/pyforge-python-school-3:latest
+          docker pull 034362041234.dkr.ecr.eu-north-1.amazonaws.com/pyforge-python-school-3:${{ env.IMAGE_TAG }}
 
       - name: Deploy Container
+        env:
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker run 034362041234.dkr.ecr.eu-north-1.amazonaws.com/pyforge-python-school-3:latest
+          docker run 034362041234.dkr.ecr.eu-north-1.amazonaws.com/pyforge-python-school-3:${{ env.IMAGE_TAG }}
       
 
       - name: Deploy docker image to EC2
