@@ -5,7 +5,7 @@ on:
       - "deployment"
 env:
   AWS_REGION: us-west-2
-  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID}}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
   SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
   SERVER_PUBLIC_IP: ${{ secrets.EC2_HOST }}
