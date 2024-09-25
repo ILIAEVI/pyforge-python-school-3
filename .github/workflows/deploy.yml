@@ -44,7 +44,7 @@ jobs:
           envs: SSH_PRIVATE_KEY,REGISTRY,REPOSITORY,IMAGE_TAG,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_DEFAULT_REGION,AWS_REGION
           script: |-
             sudo apt update
-            udo apt install -y docker.io python3-pip
+            sudo apt install -y docker.io python3-pip
             pip3 install awscli --upgrade --user
             
             aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
