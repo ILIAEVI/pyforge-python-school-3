@@ -16,9 +16,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
+
       - name: Login to AWS ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
+
       - name: Build, push docker image
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -27,6 +29,7 @@ jobs:
         run: |-
           docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG .
           docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
+
       - name: Deploy docker image to EC2
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -41,9 +44,17 @@ jobs:
           envs: SSH_PRIVATE_KEY,REGISTRY,REPOSITORY,IMAGE_TAG,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_DEFAULT_REGION,AWS_REGION
           script: |-
             sudo apt update
-            sudo apt install docker.io -y
-            sudo apt install awscli -y
-            sudo $(aws ecr get-login --no-include-email --region eu-north-1);
+            udo apt install -y docker.io python3-pip
+            pip3 install awscli --upgrade --user
+            
+            aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+            aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+            aws configure set region $AWS_REGION
+
+            # Log in to ECR
+            $(aws ecr get-login --no-include-email --region $AWS_REGION)
+
+            
             sudo docker stop pyforge-python-school-3 || true
             sudo docker rm pyforge-python-school-3 || true
             sudo docker pull $REGISTRY/$REPOSITORY:$IMAGE_TAG
