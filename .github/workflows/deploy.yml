@@ -38,8 +38,9 @@ jobs:
 
       - name: Authenticate Docker with AWS ECR
         run: |
-          $(aws ecr get-login --no-include-email --region eu-north-1)
-
+          aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 034362041234.dkr.ecr.eu-north-1.amazonaws.com
+      
+      
 
       - name: Deploy docker image to EC2
         env:
