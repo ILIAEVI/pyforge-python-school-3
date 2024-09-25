@@ -54,7 +54,7 @@ jobs:
         env:
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker run 034362041234.dkr.ecr.eu-north-1.amazonaws.com/pyforge-python-school-3:${{ env.IMAGE_TAG }}
+          sudo docker run -d -p 8000:8000 034362041234.dkr.ecr.eu-north-1.amazonaws.com/pyforge-python-school-3:${{ env.IMAGE_TAG }}
       
 
       - name: Deploy docker image to EC2
