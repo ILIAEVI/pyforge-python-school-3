@@ -51,7 +51,7 @@ jobs:
           envs: SSH_PRIVATE_KEY,REGISTRY,REPOSITORY,IMAGE_TAG,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_DEFAULT_REGION,AWS_REGION
           script: |-
             sudo apt-get update
-            sudo apt-get install -y docker.io python3-pip awscli
+            sudo apt-get install -y docker.io
             
             sudo systemctl start docker
             
