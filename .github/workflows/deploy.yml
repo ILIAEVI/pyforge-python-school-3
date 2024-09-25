@@ -43,19 +43,22 @@ jobs:
           key: ${{ env.SSH_PRIVATE_KEY }}
           envs: SSH_PRIVATE_KEY,REGISTRY,REPOSITORY,IMAGE_TAG,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_DEFAULT_REGION,AWS_REGION
           script: |-
-            sudo apt update
-            sudo apt install -y docker.io python3-pip
-            pip3 install awscli --upgrade --user
+            sudo apt-get update
             
-            aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
-            aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
-            aws configure set region $AWS_REGION
-
-            # Log in to ECR
-            $(aws ecr get-login --no-include-email --region $AWS_REGION)
+            # Install docker and awscli
+            sudo apt-get install -y docker.io python3-pip awscli
+            
+            # Ensure Docker is started
+            sudo systemctl start docker
+            
+            $(aws ecr get-login --no-include-email --region eu-north-1)
 
             
             sudo docker stop pyforge-python-school-3 || true
             sudo docker rm pyforge-python-school-3 || true
+            
+            # Pull the new image
             sudo docker pull $REGISTRY/$REPOSITORY:$IMAGE_TAG
+            
+            # Run the container
             sudo docker run -d --name pyforge-python-school-3 -p 80:80 $REGISTRY/$REPOSITORY:$IMAGE_TAG
