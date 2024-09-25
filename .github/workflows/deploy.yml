@@ -35,7 +35,11 @@ jobs:
           curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
           unzip awscliv2.zip
           sudo ./aws/install --update
-          aws --version
+
+      - name: Authenticate Docker with AWS ECR
+        run: |
+          $(aws ecr get-login --no-include-email --region eu-north-1)
+
 
       - name: Deploy docker image to EC2
         env:
@@ -54,9 +58,6 @@ jobs:
             sudo apt-get install -y docker.io
             
             sudo systemctl start docker
-            
-            $(aws ecr get-login --no-include-email --region eu-north-1)
-
             
             sudo docker stop pyforge-python-school-3 || true
             sudo docker rm pyforge-python-school-3 || true
