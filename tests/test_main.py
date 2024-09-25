@@ -5,6 +5,7 @@ from sqlalchemy import create_engine, StaticPool
 from sqlalchemy.orm import sessionmaker
 from src.main import app, get_db
 from src.main import Base
+import fakeredis
 
 
 DATABASE_URL = "sqlite:///:memory:"
@@ -107,30 +108,36 @@ def test_molecule_invalid_id(client):
     assert response.status_code == 422
 
 
-@patch('src.main.get_cached_result')
-@patch('src.main.set_cache')
-def test_search_substructure(mock_set_cache, mock_get_cached_result, client):
-    mock_get_cached_result.return_value = None
+@pytest.fixture
+def redis_client():
+    # Create a fakeredis instance
+    fake_redis = fakeredis.FakeStrictRedis()
+    with patch("src.redis.redis_client", fake_redis):
+        yield fake_redis
 
+def test_search_substructure_success(redis_client, client):
+    with patch("src.tasks.substructure_search_task.delay") as mock_substructure_search_task:
+        mock_substructure_search_task.return_value.ready.return_value = True
+        mock_substructure_search_task.return_value.state = 'SUCCESS'
+        mock_substructure_search_task.return_value.result = [
+            {'id': 1, 'smiles': 'CCO'},
+            {'id': 2, 'smiles': 'CCN'}
+        ]
 
-    client.post("/add-molecule", json={"id": 8, "smiles": "CCO"})
-    client.post("/add-molecule", json={"id": 9, "smiles": "COO"})
+        response = client.post("/molecule/search", json={"smiles": "C", "limit": 10})
 
-    response = client.post("/molecule/search", json={"smiles": "C", "limit": 10})
-    assert response.status_code == 200
-    response_data = response.json()
-    assert "matching_molecules" in response_data
-    assert len(response_data["matching_molecules"]) == 2
-    mock_get_cached_result.assert_called_once()
-    mock_set_cache.assert_called_once()
+        assert response.status_code == 200
+        assert response.json() == {
+            "matching_molecules": [{'id': 1, 'smiles': 'CCO'}, {'id': 2, 'smiles': 'CCN'}]
+        }
+        mock_substructure_search_task.assert_called_once_with("C", 10)
 
-    mock_get_cached_result.return_value = {
-        "matching_molecules": [{"id": 8, "smiles": "CCO"}, {"id": 9, "smiles": "COO"}]}
+def test_search_substructure_failure(redis_client, client):
+    with patch("src.tasks.substructure_search_task.delay") as mock_substructure_search_task:
+        mock_substructure_search_task.return_value.ready.return_value = True
+        mock_substructure_search_task.return_value.state = 'FAILURE'
 
-    response = client.post("/molecule/search", json={"smiles": "C", "limit": 10})
-    assert response.status_code == 200
-    response_data = response.json()
-    assert "source" in response_data
-    assert response_data["source"] == "cache"
-    assert "data" in response_data
-    assert len(response_data["data"]["matching_molecules"]) == 2
+        response = client.post("/molecule/search", json={"smiles": "C", "limit": 10})
+
+        assert response.status_code == 400
+        assert "Task failed with state: FAILURE" in response.json()["detail"]
