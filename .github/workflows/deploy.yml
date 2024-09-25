@@ -44,7 +44,7 @@ jobs:
             sudo apt install docker.io -y
             sudo apt install awscli -y
             sudo $(aws ecr get-login --no-include-email --region eu-north-1);
-            sudo docker stop myappcontainer || true
-            sudo docker rm myappcontainer || true
+            sudo docker stop pyforge-python-school-3 || true
+            sudo docker rm pyforge-python-school-3 || true
             sudo docker pull $REGISTRY/$REPOSITORY:$IMAGE_TAG
-            sudo docker run -d --name myappcontainer -p 80:80 $REGISTRY/$REPOSITORY:$IMAGE_TAG
+            sudo docker run -d --name pyforge-python-school-3 -p 80:80 $REGISTRY/$REPOSITORY:$IMAGE_TAG
