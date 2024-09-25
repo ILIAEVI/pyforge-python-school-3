@@ -39,7 +39,18 @@ jobs:
       - name: Authenticate Docker with AWS ECR
         run: |
           aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 034362041234.dkr.ecr.eu-north-1.amazonaws.com
-      
+
+      - name: Verify ECR Image
+        run: |
+          aws ecr describe-images --repository-name pyforge-python-school-3 --region eu-north-1
+
+      - name: Pull Docker Image
+        run: |
+          docker pull 034362041234.dkr.ecr.eu-north-1.amazonaws.com/pyforge-python-school-3:latest
+
+      - name: Deploy Container
+        run: |
+          docker run 034362041234.dkr.ecr.eu-north-1.amazonaws.com/pyforge-python-school-3:latest
       
 
       - name: Deploy docker image to EC2
@@ -62,7 +73,3 @@ jobs:
             
             sudo docker stop pyforge-python-school-3 || true
             sudo docker rm pyforge-python-school-3 || true
-            
-            sudo docker pull $REGISTRY/$REPOSITORY:$IMAGE_TAG
-            
-            sudo docker run -d --name pyforge-python-school-3 -p 80:80 $REGISTRY/$REPOSITORY:$IMAGE_TAG
