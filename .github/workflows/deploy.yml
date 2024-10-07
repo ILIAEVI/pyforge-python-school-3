@@ -1,0 +1,79 @@
+name: Deploy to AWS
+on:
+  push:
+    branches:
+      - "deployment"
+env:
+  AWS_REGION: eu-north-1
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID}}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+  SERVER_PUBLIC_IP: ${{ secrets.EC2_HOST }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Login to AWS ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build, push docker image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: pyforge-python-school-3
+          IMAGE_TAG: ${{ github.sha }}
+        run: |-
+          docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG .
+          docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
+
+      - name: Install AWS CLI
+        run: |
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install --update
+
+      - name: Authenticate Docker with AWS ECR
+        run: |
+          aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 034362041234.dkr.ecr.eu-north-1.amazonaws.com
+
+      - name: Verify ECR Image
+        run: |
+          aws ecr describe-images --repository-name pyforge-python-school-3 --region eu-north-1
+
+      - name: Pull Docker Image
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker pull 034362041234.dkr.ecr.eu-north-1.amazonaws.com/pyforge-python-school-3:${{ env.IMAGE_TAG }}
+
+      - name: Deploy Container
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          sudo docker run -d -p 8000:8000 034362041234.dkr.ecr.eu-north-1.amazonaws.com/pyforge-python-school-3:${{ env.IMAGE_TAG }}
+      
+
+      - name: Deploy docker image to EC2
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: pyforge-python-school-3
+          IMAGE_TAG: ${{ github.sha }}
+          AWS_DEFAULT_REGION: eu-north-1
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ env.SERVER_PUBLIC_IP }}
+          username: ubuntu
+          key: ${{ env.SSH_PRIVATE_KEY }}
+          envs: SSH_PRIVATE_KEY,REGISTRY,REPOSITORY,IMAGE_TAG,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_DEFAULT_REGION,AWS_REGION
+          script: |-
+            sudo apt-get update
+            sudo apt-get install -y docker.io
+            
+            sudo systemctl start docker
+            
+            sudo docker stop pyforge-python-school-3 || true
+            sudo docker rm pyforge-python-school-3 || true
