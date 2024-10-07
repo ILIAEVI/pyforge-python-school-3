@@ -1,12 +1,11 @@
 FROM continuumio/miniconda3
 LABEL authors="giorgi"
 
-# Install RDKit
 RUN conda install -c conda-forge rdkit -y
 
 COPY ./requirements.txt ./requirements.txt
 
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
