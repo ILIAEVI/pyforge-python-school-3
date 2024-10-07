@@ -1,5 +1,60 @@
 # Python Summer School 2024
 
+Deployment Process
+
+This repository uses GitHub Actions to automate deployment to AWS EC2 via Docker and AWS Elastic Container Registry (ECR). The process is triggered every time changes are pushed to the deployment branch.
+Prerequisites
+
+Check: .github/workflows/deploy.yml
+
+Before deploying, ensure the following:
+
+    You have created and configured an AWS account.
+    AWS ECR is set up to store the Docker image.
+    You have an EC2 instance configured with Docker.
+    GitHub Secrets are properly set for AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, SSH_PRIVATE_KEY, and EC2_HOST (public IP of the EC2 instance).
+
+GitHub Actions Workflow
+
+This repository includes a deploy.yml workflow that performs the following steps:
+
+    Trigger: The workflow is triggered when code is pushed to the deployment branch.
+
+    AWS and Docker Environment Variables:
+        AWS region, access keys, EC2 public IP, and SSH private key are pulled from GitHub Secrets.
+
+    Checkout the Repository:
+        The workflow checks out the latest code from the repository.
+
+    Login to AWS ECR:
+        Uses the aws-actions/amazon-ecr-login@v1 action to authenticate Docker with AWS Elastic Container Registry (ECR).
+
+    Build and Push Docker Image:
+        The Docker image is built from the current repository using the latest commit hash as the tag.
+        The built image is pushed to AWS ECR.
+
+    Install AWS CLI:
+        The AWS CLI is installed to allow further interaction with AWS services from the workflow.
+
+    Authenticate Docker with AWS ECR:
+        Docker is authenticated using AWS ECR credentials to ensure the image can be pulled.
+
+    Verify ECR Image:
+        AWS CLI is used to verify the Docker image pushed to AWS ECR.
+
+    Pull Docker Image:
+        The Docker image is pulled from AWS ECR using the image tag based on the commit hash.
+
+    Deploy to EC2:
+        The Docker image is deployed to the EC2 instance using SSH.
+        SSH connection is established with the EC2 instance, and the following tasks are performed:
+            Install Docker (if not already installed).
+            Start the Docker service.
+            Stop and remove any running instance of the pyforge-python-school-3 container.
+            Pull the latest Docker image from ECR.
+            Run the new container with the specified configuration.
+
+
 ## Substructure search
 
 Substructure search of chemical compounds is a crucial tool in cheminformatics, enabling researchers to identify and analyze chemical structures containing specific substructures. This method is widely applied in various fields of chemistry, including drug discovery, materials science, and environmental research. Substructure search helps scientists and engineers identify compounds with desired properties, predict reactivity, and understand the mechanisms of chemical reactions.

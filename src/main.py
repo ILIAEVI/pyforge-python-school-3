@@ -1,14 +1,21 @@
-from rdkit import Chem
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+from os import getenv
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field, ValidationError, field_validator
-from os import getenv
-from database import SessionLocal
+from rdkit import Chem
 from sqlalchemy.orm import Session
-from models import Molecule
+from src.celery_worker import celery
+from .redis import get_cached_result, set_cache
+from fastapi.responses import JSONResponse
+from src.models import Molecule, Base
+from src.tasks import substructure_search_task, substructure_search
+from src.database import engine, get_db
 
-app = FastAPI()
 
-molecules = {}
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class MoleculeSchema(BaseModel):
@@ -24,14 +31,21 @@ class MoleculeSchema(BaseModel):
 
 class SubstructureSearch(BaseModel):
     smiles: str
+    limit: int = Field(default=100, gt=0)
+
+    @field_validator('limit')
+    def validate_limit(cls, value):
+        if value <= 0:
+            raise ValueError("Limit must be a positive integer")
+        return value
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+
+@asynccontextmanager
+async def lifespan():
+    Base.metadata.create_all(bind=engine)
+
+app = FastAPI()
 
 
 @app.get("/")
@@ -49,8 +63,11 @@ def add_molecule(molecule: MoleculeSchema, db: Session = Depends(get_db)):
     db.add(new_molecule)
     db.commit()
     db.refresh(new_molecule)
-    return {"id": new_molecule.id, "smiles": new_molecule.smiles}
-
+    logger.info(f"Added molecule with ID: {new_molecule.id} and SMILES: {new_molecule.smiles}")
+    return JSONResponse(
+        status_code=201,
+        content={"id": new_molecule.id, "smiles": new_molecule.smiles}
+    )
 
 @app.get("/molecule")
 def list_molecules(db: Session = Depends(get_db)):
@@ -79,7 +96,12 @@ def update_molecule(molecule_id: int, mol: MoleculeSchema, db: Session = Depends
     molecule.smiles = mol.smiles
     db.commit()
     db.refresh(molecule)
-    return {"id": molecule.id, "smiles": molecule.smiles}
+    logger.info(f"Updated molecule with ID: {molecule.id} to new SMILES: {molecule.smiles}")
+    return JSONResponse(
+        status_code=200,
+        content={"id": molecule.id, "smiles": molecule.smiles}
+    )
+
 
 
 @app.delete("/molecule/delete/{molecule_id}")
@@ -89,39 +111,38 @@ def delete_molecule(molecule_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Molecule not found")
     db.delete(molecule)
     db.commit()
-    return {"message": "Molecule deleted successfully"}
-
+    logger.info(f"Deleted molecule with ID: {molecule_id}")
+    return JSONResponse(
+        status_code=200,
+        content={"message": "Molecule deleted successfully"}
+    )
 
 @app.post("/molecule/search")
-def search_substructure(query: SubstructureSearch, db: Session = Depends(get_db)):
+async def search_substructure(query: SubstructureSearch, db: Session = Depends(get_db)):
     substructure_smiles = query.smiles
-    molecules_lst = db.query(Molecule).all()
-    if not molecules_lst:
-        raise HTTPException(status_code=404, detail="No molecules in the database")
-    try:
-        matching_molecules = substructure_search(molecules_lst, substructure_smiles)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    if not matching_molecules:
-        raise HTTPException(status_code=404, detail="No substructure matches")
-    return {"matching_molecules": matching_molecules}
+    limit = query.limit
 
+    cache_key = f"substructure_search:{substructure_smiles}:{limit}"
+    cached_result = get_cached_result(cache_key)
 
-def substructure_search(mols, mol):
-    matching_molecules = []
-    substructure_mol = Chem.MolFromSmiles(mol)
-    if substructure_mol is None:
-        raise ValueError("Invalid substructure SMILES string")
+    if cached_result:
+        logger.info(f"Cache hit for substructure search: {substructure_smiles}")
+        return {"source": "cache", "data": cached_result}
 
-    for molecule in mols:
-        molecule_smiles = molecule.smiles
-        molecule_mol = Chem.MolFromSmiles(molecule_smiles)
-        if molecule_mol is None:
-            continue
-        if molecule_mol.HasSubstructMatch(substructure_mol):
-            matching_molecules.append({'id': molecule.id, 'smiles': molecule.smiles})
+    task = substructure_search_task.delay(substructure_smiles, limit)
 
-    return matching_molecules
+    while not task.ready():
+        await asyncio.sleep(1)
+
+    if task.state == 'SUCCESS':
+        matching_molecules = task.result
+        set_cache(cache_key, {"matching_molecules": matching_molecules}, expiration=60)
+        return JSONResponse(
+            status_code=200,
+            content={"matching_molecules": matching_molecules}
+        )
+    else:
+        raise HTTPException(status_code=400, detail=f"Task failed with state: {task.state}")
 
 
 if __name__ == "__main__":
