@@ -1,21 +1,59 @@
 version: '3.8'
+
 services:
+  db:
+    image: postgres:14.4-bullseye
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: smiles
+      POSTGRES_PASSWORD: smiles
+      POSTGRES_DB: smiles
+    restart: always
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test:
+        [ "CMD", "pg_isready", "-q", "-d", "smiles", "-U", "smiles" ]
+      timeout: 45s
+      interval: 10s
+      retries: 10
+
+  celery_worker:
+    build: .
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./src:/app
+    command: celery -A src.celery_worker.celery worker --loglevel=info
+
+  redis:
+    image: "redis:alpine"
+    ports:
+      - "6379:6379"
+
   web1:
     build: .
+    depends_on:
+      - db
+      - redis
     volumes:
       - ./src:/app
     environment:
-      SERVER_ID: SERVER-1
+      DATABASE_URL: postgresql://smiles:smiles@db:5432/smiles
     ports:
       - "8001:8000"
 
-
   web2:
     build: .
+    depends_on:
+      - db
+      - redis
     volumes:
       - ./src:/app
     environment:
-      SERVER_ID: SERVER-2
+      DATABASE_URL: postgresql://smiles:smiles@db:5432/smiles
     ports:
       - "8002:8000"
 
@@ -28,3 +66,7 @@ services:
     depends_on:
       - web1
       - web2
+
+
+volumes:
+  postgres_data:

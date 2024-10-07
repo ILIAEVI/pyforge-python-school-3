@@ -1,14 +1,24 @@
-from rdkit import Chem
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field, ValidationError, field_validator
+import asyncio
+import logging
+from contextlib import asynccontextmanager
 from os import getenv
+from fastapi import FastAPI, HTTPException, Depends
+from pydantic import BaseModel, Field, ValidationError, field_validator
+from rdkit import Chem
+from sqlalchemy.orm import Session
+from src.celery_worker import celery
+from .redis import get_cached_result, set_cache
+from fastapi.responses import JSONResponse
+from src.models import Molecule, Base
+from src.tasks import substructure_search_task, substructure_search
+from src.database import engine, get_db
 
-app = FastAPI()
 
-molecules = {}
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
-class Molecule(BaseModel):
+class MoleculeSchema(BaseModel):
     id: int = Field(..., gt=0)
     smiles: str
 
@@ -21,6 +31,21 @@ class Molecule(BaseModel):
 
 class SubstructureSearch(BaseModel):
     smiles: str
+    limit: int = Field(default=100, gt=0)
+
+    @field_validator('limit')
+    def validate_limit(cls, value):
+        if value <= 0:
+            raise ValueError("Limit must be a positive integer")
+        return value
+
+
+
+@asynccontextmanager
+async def lifespan():
+    Base.metadata.create_all(bind=engine)
+
+app = FastAPI()
 
 
 @app.get("/")
@@ -29,73 +54,95 @@ def get_server():
 
 
 @app.post("/add-molecule")
-def add_molecule(molecule: Molecule):
+def add_molecule(molecule: MoleculeSchema, db: Session = Depends(get_db)):
     if not Chem.MolFromSmiles(molecule.smiles):
         raise HTTPException(status_code=400, detail="Invalid SMILES")
-    if molecule.id in molecules:
+    if db.query(Molecule).filter(Molecule.id == molecule.id).first():
         raise HTTPException(status_code=400, detail="Molecule ID already exists")
-    molecules[molecule.id] = molecule.smiles
-    return {"id": molecule.id, "smiles": molecule.smiles}
-
+    new_molecule = Molecule(id=molecule.id, smiles=molecule.smiles)
+    db.add(new_molecule)
+    db.commit()
+    db.refresh(new_molecule)
+    logger.info(f"Added molecule with ID: {new_molecule.id} and SMILES: {new_molecule.smiles}")
+    return JSONResponse(
+        status_code=201,
+        content={"id": new_molecule.id, "smiles": new_molecule.smiles}
+    )
 
 @app.get("/molecule")
-def list_molecules():
-    if molecules:
-        return [Molecule(id=m_id, smiles=smiles) for m_id, smiles in molecules.items()]
+def list_molecules(db: Session = Depends(get_db)):
+    molecules_lst = db.query(Molecule).all()
+    if molecules_lst:
+        return molecules_lst
     else:
         raise HTTPException(status_code=404, detail="No molecules found")
 
 
 @app.get("/molecule/{molecule_id}")
-def get_molecule(molecule_id: int):
-    if molecule_id not in molecules:
+def get_molecule(molecule_id: int, db: Session = Depends(get_db)):
+    molecule = db.query(Molecule).filter(Molecule.id == molecule_id).first()
+    if molecule is None:
         raise HTTPException(status_code=404, detail="Molecule not found")
-    return Molecule(id=molecule_id, smiles=molecules[molecule_id])
+    return molecule
 
 
 @app.put("/molecule/update/{molecule_id}")
-def update_molecule(molecule_id: int, molecule: Molecule):
-    if not Chem.MolFromSmiles(molecule.smiles):
+def update_molecule(molecule_id: int, mol: MoleculeSchema, db: Session = Depends(get_db)):
+    if not Chem.MolFromSmiles(mol.smiles):
         raise HTTPException(status_code=400, detail="Invalid SMILES")
-    if molecule_id not in molecules:
+    molecule = db.query(Molecule).filter(Molecule.id == molecule_id).first()
+    if molecule is None:
         raise HTTPException(status_code=404, detail="Molecule not found")
-    molecules[molecule_id] = molecule.smiles
-    return {"id": molecule.id, "smiles": molecule.smiles}
+    molecule.smiles = mol.smiles
+    db.commit()
+    db.refresh(molecule)
+    logger.info(f"Updated molecule with ID: {molecule.id} to new SMILES: {molecule.smiles}")
+    return JSONResponse(
+        status_code=200,
+        content={"id": molecule.id, "smiles": molecule.smiles}
+    )
+
 
 
 @app.delete("/molecule/delete/{molecule_id}")
-def delete_molecule(molecule_id: int):
-    if molecule_id not in molecules:
+def delete_molecule(molecule_id: int, db: Session = Depends(get_db)):
+    molecule = db.query(Molecule).filter(Molecule.id == molecule_id).first()
+    if molecule is None:
         raise HTTPException(status_code=404, detail="Molecule not found")
-    del molecules[molecule_id]
-    return {"message": "Molecule deleted successfully"}
-
+    db.delete(molecule)
+    db.commit()
+    logger.info(f"Deleted molecule with ID: {molecule_id}")
+    return JSONResponse(
+        status_code=200,
+        content={"message": "Molecule deleted successfully"}
+    )
 
 @app.post("/molecule/search")
-def search_substructure(query: SubstructureSearch):
+async def search_substructure(query: SubstructureSearch, db: Session = Depends(get_db)):
     substructure_smiles = query.smiles
-    try:
-        matching_molecules = substructure_search(molecules, substructure_smiles)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    if not matching_molecules:
-        raise HTTPException(status_code=404, detail="No substructure matches")
-    return {"matching_molecules": matching_molecules}
+    limit = query.limit
 
+    cache_key = f"substructure_search:{substructure_smiles}:{limit}"
+    cached_result = get_cached_result(cache_key)
 
-def substructure_search(mols, mol):
-    matching_molecules = []
-    substructure_mol = Chem.MolFromSmiles(mol)
-    if substructure_mol is None:
-        raise ValueError("Invalid substructure SMILES string")
+    if cached_result:
+        logger.info(f"Cache hit for substructure search: {substructure_smiles}")
+        return {"source": "cache", "data": cached_result}
 
-    for mol_id, smiles in mols.items():
-        molecule = Chem.MolFromSmiles(smiles)
-        if not molecule:
-            raise ValueError(f"Invalid SMILES string {smiles}")
-        if molecule.HasSubstructMatch(substructure_mol):
-            matching_molecules.append({'id': mol_id, 'smiles': smiles})
-    return matching_molecules
+    task = substructure_search_task.delay(substructure_smiles, limit)
+
+    while not task.ready():
+        await asyncio.sleep(1)
+
+    if task.state == 'SUCCESS':
+        matching_molecules = task.result
+        set_cache(cache_key, {"matching_molecules": matching_molecules}, expiration=60)
+        return JSONResponse(
+            status_code=200,
+            content={"matching_molecules": matching_molecules}
+        )
+    else:
+        raise HTTPException(status_code=400, detail=f"Task failed with state: {task.state}")
 
 
 if __name__ == "__main__":
